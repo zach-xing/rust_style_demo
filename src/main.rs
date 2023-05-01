@@ -75,6 +75,7 @@ impl EditorRows {
         self.row_contents.len()
     }
 
+    /** 获取某一行 */
     fn get_row(&self, at: usize) -> &str {
         &self.row_contents[at].row_content
     }
@@ -367,7 +368,11 @@ impl CursorController {
                     self.cursor_x += 1;
                 }
             }
-            KeyCode::End => self.cursor_x = self.screen_columns - 1,
+            KeyCode::End => {
+                if self.cursor_y < number_of_rows {
+                    self.cursor_y = editor_rows.get_row(self.cursor_y).len();
+                }
+            }
             KeyCode::Home => self.cursor_x = 0,
             _ => unimplemented!(),
         }
