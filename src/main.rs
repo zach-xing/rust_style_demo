@@ -70,6 +70,7 @@ impl EditorRows {
         &self.row_contents[at]
     }
 
+    /** 总行数 */
     fn number_of_rows(&self) -> usize {
         self.row_contents.len()
     }
@@ -211,7 +212,7 @@ impl Output {
         queue!(self.editor_contents, cursor::Hide, cursor::MoveTo(0, 0))?;
         self.draw_rows();
 
-        let cursor_x = self.cursor_controller.render_x  - self.cursor_controller.column_offset;
+        let cursor_x = self.cursor_controller.render_x - self.cursor_controller.column_offset;
         let cursor_y = self.cursor_controller.cursor_y - self.cursor_controller.row_offset;
         queue!(
             self.editor_contents,
@@ -273,13 +274,24 @@ impl Editor {
             KeyEvent {
                 code: val @ (KeyCode::PageUp | KeyCode::PageDown),
                 modifiers: KeyModifiers::NONE,
-            } => (0..self.output.win_size.1).for_each(|_| {
-                self.output.move_cursor(if matches!(val, KeyCode::PageUp) {
-                    KeyCode::Up
+            } => {
+                if matches!(val, KeyCode::PageUp) {
+                    self.output.cursor_controller.cursor_y =
+                        self.output.cursor_controller.row_offset
                 } else {
-                    KeyCode::Down
-                });
-            }),
+                    self.output.cursor_controller.cursor_y = cmp::min(
+                        self.output.win_size.1 + self.output.cursor_controller.row_offset - 1,
+                        self.output.editor_rows.number_of_rows(),
+                    );
+                }
+                (0..self.output.win_size.1).for_each(|_| {
+                    self.output.move_cursor(if matches!(val, KeyCode::PageUp) {
+                        KeyCode::Up
+                    } else {
+                        KeyCode::Down
+                    });
+                })
+            }
             _ => {}
         }
         Ok(true)
