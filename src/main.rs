@@ -215,6 +215,7 @@ struct Output {
     cursor_controller: CursorController,
     editor_rows: EditorRows,
     status_message: StatusMessage,
+    dirty: u64, // 是否在打开后或保存文件后被修改，脏数据，每更改文本后递增
 }
 
 impl Output {
@@ -228,6 +229,7 @@ impl Output {
             cursor_controller: CursorController::new(win_size),
             editor_rows: EditorRows::new(),
             status_message: StatusMessage::new("HELP: Ctrl+Q = Quit | Ctrl-S = Save".into()),
+            dirty: 0,
         }
     }
 
@@ -281,13 +283,14 @@ impl Output {
         self.editor_contents
             .push_str(&style::Attribute::Reverse.to_string());
         let info = format!(
-            "{} -- {} lines",
+            "{} {} -- {} lines",
             self.editor_rows
                 .filename
                 .as_ref()
                 .and_then(|path| path.file_name())
                 .and_then(|name| name.to_str())
                 .unwrap_or("[No Name]"),
+            if self.dirty > 0 { "(modified)" } else { "" },
             self.editor_rows.number_of_rows()
         );
         let info_len = cmp::min(info.len(), self.win_size.0);
@@ -348,12 +351,14 @@ impl Output {
     /** 插入一个 ch */
     fn insert_char(&mut self, ch: char) {
         if self.cursor_controller.cursor_y == self.editor_rows.number_of_rows() {
-            self.editor_rows.insert_row()
+            self.editor_rows.insert_row();
+            self.dirty += 1;
         }
         self.editor_rows
             .get_editor_row_mut(self.cursor_controller.cursor_y)
             .insert_char(self.cursor_controller.cursor_x, ch);
         self.cursor_controller.cursor_x += 1;
+        self.dirty += 1;
     }
 }
 
@@ -428,7 +433,8 @@ impl Editor {
             } => self.output.editor_rows.save().map(|len| {
                 self.output
                     .status_message
-                    .set_message(format!("{} butes written to disk", len))
+                    .set_message(format!("{} butes written to disk", len));
+                self.output.dirty = 0
             })?,
             KeyEvent {
                 code: code @ (KeyCode::Char(..) | KeyCode::Tab),
