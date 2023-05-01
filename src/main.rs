@@ -149,8 +149,10 @@ impl EditorRows {
         })
     }
 
-    fn insert_row(&mut self) {
-        self.row_contents.push(Row::default());
+    fn insert_row(&mut self, at: usize, contents: String) {
+        let mut new_row = Row::new(contents, String::new());
+        EditorRows::render_row(&mut new_row);
+        self.row_contents.insert(at, new_row);
     }
 
     fn get_editor_row_mut(&mut self, at: usize) -> &mut Row {
@@ -174,6 +176,14 @@ impl EditorRows {
                 Ok(contents.as_bytes().len())
             }
         }
+    }
+
+    /** 连接相邻行（当进行删除操作影响多行时，出触发此函数） */
+    fn join_adjacent_rows(&mut self, at: usize) {
+        let current_row = self.row_contents.remove(at);
+        let previous_row = self.get_editor_row_mut(at - 1);
+        previous_row.row_content.push_str(&current_row.row_content);
+        Self::render_row(previous_row);
     }
 }
 
@@ -358,7 +368,8 @@ impl Output {
     /** 插入一个 ch */
     fn insert_char(&mut self, ch: char) {
         if self.cursor_controller.cursor_y == self.editor_rows.number_of_rows() {
-            self.editor_rows.insert_row();
+            self.editor_rows
+                .insert_row(self.editor_rows.number_of_rows(), String::new());
             self.dirty += 1;
         }
         self.editor_rows
@@ -372,14 +383,48 @@ impl Output {
         if self.cursor_controller.cursor_y == self.editor_rows.number_of_rows() {
             return;
         }
+        if self.cursor_controller.cursor_y == 0 && self.cursor_controller.cursor_x == 0 {
+            return;
+        }
         let row = self
             .editor_rows
             .get_editor_row_mut(self.cursor_controller.cursor_y);
         if self.cursor_controller.cursor_x > 0 {
             row.delete_char(self.cursor_controller.cursor_x - 1);
             self.cursor_controller.cursor_x -= 1;
-            self.dirty += 1;
+            // self.dirty += 1;
+        } else {
+            let previous_row_content = self
+                .editor_rows
+                .get_row(self.cursor_controller.cursor_y - 1);
+            self.cursor_controller.cursor_x = previous_row_content.len();
+            self.editor_rows
+                .join_adjacent_rows(self.cursor_controller.cursor_y);
+            self.cursor_controller.cursor_y -= 1;
         }
+        self.dirty += 1;
+    }
+
+    fn insert_newline(&mut self) {
+        if self.cursor_controller.cursor_x == 0 {
+            self.editor_rows
+                .insert_row(self.cursor_controller.cursor_y, String::new())
+        } else {
+            // 当在某行中按下 enter 键，则会新建一行并显示之后的内容
+            let current_row = self
+                .editor_rows
+                .get_editor_row_mut(self.cursor_controller.cursor_y);
+            let new_row_content = current_row.row_content[self.cursor_controller.cursor_x..].into();
+            current_row
+                .row_content
+                .truncate(self.cursor_controller.cursor_x);
+            EditorRows::render_row(current_row);
+            self.editor_rows
+                .insert_row(self.cursor_controller.cursor_y + 1, new_row_content);
+        }
+        self.cursor_controller.cursor_x = 0;
+        self.cursor_controller.cursor_y += 1;
+        self.dirty += 1;
     }
 }
 
@@ -478,6 +523,10 @@ impl Editor {
                 }
                 self.output.delete_char()
             }
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+            } => self.output.insert_newline(),
             KeyEvent {
                 code: code @ (KeyCode::Char(..) | KeyCode::Tab),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
