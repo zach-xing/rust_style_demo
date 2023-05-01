@@ -1,0 +1,15 @@
+qqqqq,sdfFirst, we calculate the potential capacity of the render string using fold
+. We have to loop through the chars of the row_content and if the char is 
+a tab, we add 8 else we add 1. After setting the capacity, we then go 
+through the chars to check whether the current character is a tab. If it is,
+we append one space (because each tab must advance the cursor forward at least 
+one column), and then append spaces until we get to a tab stop, which is a 
+column thatis divisible by 8.
+
+  
+fn draw_rows(&mut self) {
+    let screen_rows = self.win_size.1;
+    let screen_columns = self.win_size.0;
+    for i in 0..screen_rows {
+        let file_row = i + self.cursor_controller.row_offset;
+        if file_row >= self.editor_rows.nu

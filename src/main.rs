@@ -2,7 +2,7 @@ use crossterm::event::*;
 use crossterm::terminal::ClearType;
 use crossterm::{cursor, event, execute, queue, style, terminal};
 use std::cmp::Ordering;
-use std::io::{stdout, Write};
+use std::io::{stdout, ErrorKind, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant}; // add import
 use std::{cmp, env, fs, io};
@@ -149,6 +149,25 @@ impl EditorRows {
     fn get_editor_row_mut(&mut self, at: usize) -> &mut Row {
         &mut self.row_contents[at]
     }
+
+    /** 保存到本地 */
+    fn save(&self) -> io::Result<usize> {
+        match &self.filename {
+            None => Err(io::Error::new(ErrorKind::Other, "no file name specified")),
+            Some(name) => {
+                let mut file = fs::OpenOptions::new().write(true).create(true).open(name)?;
+                let contents: String = self
+                    .row_contents
+                    .iter()
+                    .map(|it| it.row_content.as_str())
+                    .collect::<Vec<&str>>()
+                    .join("\n");
+                file.set_len(contents.len() as u64)?;
+                file.write_all(contents.as_bytes())?;
+                Ok(contents.as_bytes().len())
+            }
+        }
+    }
 }
 
 struct EditorContents {
@@ -208,7 +227,7 @@ impl Output {
             editor_contents: EditorContents::new(),
             cursor_controller: CursorController::new(win_size),
             editor_rows: EditorRows::new(),
-            status_message: StatusMessage::new("HELP: Ctrl+Q = Quit".into()),
+            status_message: StatusMessage::new("HELP: Ctrl+Q = Quit | Ctrl-S = Save".into()),
         }
     }
 
@@ -402,6 +421,15 @@ impl Editor {
                     });
                 })
             }
+            // 保存文件
+            KeyEvent {
+                code: KeyCode::Char('s'),
+                modifiers: KeyModifiers::CONTROL,
+            } => self.output.editor_rows.save().map(|len| {
+                self.output
+                    .status_message
+                    .set_message(format!("{} butes written to disk", len))
+            })?,
             KeyEvent {
                 code: code @ (KeyCode::Char(..) | KeyCode::Tab),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
@@ -537,38 +565,4 @@ fn main() -> crossterm::Result<()> {
     let mut editor = Editor::new();
     while editor.run()? {}
     Ok(())
-
-    // loop {
-    //     if event::poll(Duration::from_millis(500))? {
-    //         if let Event::Key(event) = event::read()? {
-    //             match event {
-    //                 // 这里是 ctrl + q 后退出
-    //                 KeyEvent {
-    //                     code: KeyCode::Char('q'),
-    //                     modifiers: event::KeyModifiers::CONTROL,
-    //                 } => break,
-    //                 _ => {
-    //                     // todo
-    //                 }
-    //             }
-    //             println!("{:?}\r", event);
-    //         }
-    //     } else {
-    //         println!("No input yet\r")
-    //     }
-    // }
-
-    // let mut buf = [0; 1];
-    // // 当读取结束后 或 按下"q"键后退出
-    // while io::stdin().read(&mut buf).expect("Failed to read line") == 1 && buf != [b'q'] {
-    //     let character = buf[0] as char;
-    //     if character.is_control() {
-    //         println!("{}", character as u8)
-    //     } else {
-    //         println!("{}", character)
-    //     }
-    // }
-
-    // Ok(())
-    // terminal::disable_raw_mode().expect("Could not turn off raw mode");
 }
