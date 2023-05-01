@@ -1,9 +1,10 @@
 use crossterm::terminal::ClearType;
 use crossterm::{cursor, event, execute, terminal};
 use crossterm::{event::*, queue};
-use std::io::{self, stdout, Write};
+use std::io::{stdout, Write};
+use std::path::Path;
 use std::time::Duration;
-// use std::io::Read;
+use std::{cmp, env, fs, io};
 
 struct CleanUp;
 
@@ -11,6 +12,38 @@ impl Drop for CleanUp {
     fn drop(&mut self) {
         terminal::disable_raw_mode().expect("Could not disable raw mode");
         Output::clear_screen().expect("error");
+    }
+}
+
+struct EditorRows {
+    row_contents: Vec<Box<str>>,
+}
+
+impl EditorRows {
+    fn new() -> Self {
+        let mut arg = env::args();
+        match arg.nth(1) {
+            None => Self {
+                row_contents: Vec::new(),
+            },
+            Some(file) => Self::from_file(file.as_ref()),
+        }
+    }
+
+    fn from_file(file: &Path) -> Self {
+        let file_contents = fs::read_to_string(file).expect("Unable to read file");
+        Self {
+            // 下面的 into 是因为 lines 返回 &str，需要 into 转换成 Box<str>
+            row_contents: file_contents.lines().map(|it| it.into()).collect(),
+        }
+    }
+
+    fn number_of_rows(&self) -> usize {
+        self.row_contents.len()
+    }
+
+    fn get_row(&self, at: usize) -> &str {
+        &self.row_contents[at]
     }
 }
 
@@ -57,6 +90,7 @@ struct Output {
     win_size: (usize, usize),
     editor_contents: EditorContents,
     cursor_controller: CursorController,
+    editor_rows: EditorRows,
 }
 
 impl Output {
@@ -68,6 +102,7 @@ impl Output {
             win_size,
             editor_contents: EditorContents::new(),
             cursor_controller: CursorController::new(win_size),
+            editor_rows: EditorRows::new(),
         }
     }
 
@@ -81,24 +116,30 @@ impl Output {
         let screen_columns = self.win_size.0;
 
         for i in 0..screen_rows {
-            if i == screen_rows / 3 {
-                let mut welcome = format!("Text Editor --- Version 1 ");
-                if welcome.len() > screen_columns {
-                    welcome.truncate(screen_columns)
-                }
+            let file_row = i + self.cursor_controller.row_offset;
+            if file_row >= self.editor_rows.number_of_rows() {
+                if self.editor_rows.number_of_rows() == 0 && i == screen_rows / 3 {
+                    let mut welcome = format!("Text Editor --- Version 1 ");
+                    if welcome.len() > screen_columns {
+                        welcome.truncate(screen_columns)
+                    }
 
-                let mut padding = (screen_columns - welcome.len()) / 2;
-                if padding != 0 {
+                    let mut padding = (screen_columns - welcome.len()) / 2;
+                    if padding != 0 {
+                        self.editor_contents.push('~');
+                        padding -= 1
+                    }
+                    (0..padding).for_each(|_| self.editor_contents.push(' '));
+
+                    self.editor_contents.push_str(&welcome)
+                } else {
                     self.editor_contents.push('~');
-                    padding -= 1
                 }
-                (0..padding).for_each(|_| self.editor_contents.push(' '));
-
-                self.editor_contents.push_str(&welcome)
             } else {
-                self.editor_contents.push('~');
+                let len = cmp::min(self.editor_rows.get_row(file_row).len(), screen_columns);
+                self.editor_contents
+                    .push_str(&self.editor_rows.get_row(file_row)[..len])
             }
-            self.editor_contents.push('~');
             queue!(
                 self.editor_contents,
                 terminal::Clear(ClearType::UntilNewLine)
@@ -111,11 +152,12 @@ impl Output {
     }
 
     fn refresh_screen(&mut self) -> crossterm::Result<()> {
+        self.cursor_controller.scroll();
         queue!(self.editor_contents, cursor::Hide, cursor::MoveTo(0, 0))?;
         self.draw_rows();
 
         let cursor_x = self.cursor_controller.cursor_x;
-        let cursor_y = self.cursor_controller.cursor_y;
+        let cursor_y = self.cursor_controller.cursor_y - self.cursor_controller.row_offset;
         queue!(
             self.editor_contents,
             cursor::MoveTo(cursor_x as u16, cursor_y as u16),
@@ -125,7 +167,7 @@ impl Output {
     }
 
     fn move_cursor(&mut self, direction: KeyCode) {
-        self.cursor_controller.move_cursor(direction);
+        self.cursor_controller.move_cursor(direction, self.editor_rows.number_of_rows());
     }
 }
 
@@ -198,6 +240,8 @@ struct CursorController {
     cursor_y: usize,
     screen_columns: usize,
     screen_rows: usize,
+    /** 滚动到某一行 */
+    row_offset: usize,
 }
 
 impl CursorController {
@@ -207,10 +251,11 @@ impl CursorController {
             cursor_y: 0,
             screen_columns: win_size.0,
             screen_rows: win_size.1,
+            row_offset: 0, // 默认滚动到首行
         }
     }
 
-    fn move_cursor(&mut self, direction: KeyCode) {
+    fn move_cursor(&mut self, direction: KeyCode, number_of_rows: usize) {
         match direction {
             KeyCode::Up => {
                 self.cursor_y = self.cursor_y.saturating_sub(1);
@@ -221,7 +266,7 @@ impl CursorController {
                 }
             }
             KeyCode::Down => {
-                if self.cursor_y != self.screen_rows - 1 {
+                if self.cursor_y < number_of_rows {
                     self.cursor_y += 1;
                 }
             }
@@ -233,6 +278,13 @@ impl CursorController {
             KeyCode::End => self.cursor_x = self.screen_columns - 1,
             KeyCode::Home => self.cursor_x = 0,
             _ => unimplemented!(),
+        }
+    }
+
+    fn scroll(&mut self) {
+        self.row_offset = cmp::min(self.row_offset, self.cursor_y);
+        if self.cursor_y >= self.row_offset + self.screen_rows {
+            self.row_offset = self.cursor_y - self.screen_rows + 1;
         }
     }
 }
