@@ -1,4 +1,4 @@
-qqqqq,sdfFirst, we calculate the potential capacity of the render string using fold
+qqqdFrst, we calculate the potential capacity of the render string using fold
 . We have to loop through the chars of the row_content and if the char is 
 a tab, we add 8 else we add 1. After setting the capacity, we then go 
 through the chars to check whether the current character is a tab. If it is,
