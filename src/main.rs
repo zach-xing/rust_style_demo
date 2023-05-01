@@ -1,6 +1,7 @@
 use crossterm::terminal::ClearType;
 use crossterm::{cursor, event, execute, terminal};
 use crossterm::{event::*, queue};
+use std::cmp::Ordering;
 use std::io::{stdout, Write};
 use std::path::Path;
 use std::time::Duration;
@@ -136,9 +137,11 @@ impl Output {
                     self.editor_contents.push('~');
                 }
             } else {
-                let len = cmp::min(self.editor_rows.get_row(file_row).len(), screen_columns);
-                self.editor_contents
-                    .push_str(&self.editor_rows.get_row(file_row)[..len])
+                let row = self.editor_rows.get_row(file_row);
+                let column_offset = self.cursor_controller.column_offset;
+                let len = cmp::min(row.len().saturating_sub(column_offset), screen_columns);
+                let start = if len == 0 { 0 } else { column_offset };
+                self.editor_contents.push_str(&row[start..start + len])
             }
             queue!(
                 self.editor_contents,
@@ -156,7 +159,7 @@ impl Output {
         queue!(self.editor_contents, cursor::Hide, cursor::MoveTo(0, 0))?;
         self.draw_rows();
 
-        let cursor_x = self.cursor_controller.cursor_x;
+        let cursor_x = self.cursor_controller.cursor_x - self.cursor_controller.column_offset;
         let cursor_y = self.cursor_controller.cursor_y - self.cursor_controller.row_offset;
         queue!(
             self.editor_contents,
@@ -167,7 +170,8 @@ impl Output {
     }
 
     fn move_cursor(&mut self, direction: KeyCode) {
-        self.cursor_controller.move_cursor(direction, self.editor_rows.number_of_rows());
+        self.cursor_controller
+            .move_cursor(direction, &self.editor_rows);
     }
 }
 
@@ -240,8 +244,10 @@ struct CursorController {
     cursor_y: usize,
     screen_columns: usize,
     screen_rows: usize,
-    /** 滚动到某一行 */
+    /** 垂直滚动到某一行 */
     row_offset: usize,
+    /** 水平滚动到某一行 */
+    column_offset: usize,
 }
 
 impl CursorController {
@@ -252,10 +258,13 @@ impl CursorController {
             screen_columns: win_size.0,
             screen_rows: win_size.1,
             row_offset: 0, // 默认滚动到首行
+            column_offset: 0,
         }
     }
 
-    fn move_cursor(&mut self, direction: KeyCode, number_of_rows: usize) {
+    fn move_cursor(&mut self, direction: KeyCode, editor_rows: &EditorRows) {
+        let number_of_rows = editor_rows.number_of_rows();
+
         match direction {
             KeyCode::Up => {
                 self.cursor_y = self.cursor_y.saturating_sub(1);
@@ -263,6 +272,10 @@ impl CursorController {
             KeyCode::Left => {
                 if self.cursor_x != 0 {
                     self.cursor_x -= 1;
+                } else if self.cursor_y > 0 {
+                    // 这里是当在行首时按 left 键后移动到上一行的末尾
+                    self.cursor_y -= 1;
+                    self.cursor_x = editor_rows.get_row(self.cursor_y).len();
                 }
             }
             KeyCode::Down => {
@@ -271,7 +284,20 @@ impl CursorController {
                 }
             }
             KeyCode::Right => {
-                if self.cursor_x != self.screen_columns - 1 {
+                if self.cursor_y < number_of_rows {
+                    // 当在行尾时按 Right 后，移动到下一行的行首
+                    match self.cursor_x.cmp(&editor_rows.get_row(self.cursor_y).len()) {
+                        Ordering::Less => self.cursor_x += 1,
+                        Ordering::Equal => {
+                            self.cursor_y += 1;
+                            self.cursor_x = 1
+                        }
+                        _ => {}
+                    }
+                }
+                if self.cursor_y < number_of_rows
+                    && self.cursor_x < editor_rows.get_row(self.cursor_y).len()
+                {
                     self.cursor_x += 1;
                 }
             }
@@ -279,12 +305,22 @@ impl CursorController {
             KeyCode::Home => self.cursor_x = 0,
             _ => unimplemented!(),
         }
+        let row_len = if self.cursor_y < number_of_rows {
+            editor_rows.get_row(self.cursor_y).len()
+        } else {
+            0
+        };
+        self.cursor_x = cmp::min(self.cursor_x, row_len);
     }
 
     fn scroll(&mut self) {
         self.row_offset = cmp::min(self.row_offset, self.cursor_y);
         if self.cursor_y >= self.row_offset + self.screen_rows {
             self.row_offset = self.cursor_y - self.screen_rows + 1;
+        }
+        self.column_offset = cmp::min(self.column_offset, self.cursor_x);
+        if self.cursor_x >= self.column_offset + self.screen_columns {
+            self.column_offset = self.cursor_x - self.screen_columns + 1;
         }
     }
 }
