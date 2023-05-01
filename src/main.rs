@@ -10,6 +10,54 @@ use std::{cmp, env, fs, io};
 const TAB_STOP: usize = 8;
 const QUIT_TIMES: u8 = 3;
 
+#[macro_export]
+macro_rules! prompt {
+    ($output: expr, $($args:tt)*) => {{
+        let output: &mut Output = &mut $output;
+        let mut input = String::with_capacity(32);
+        loop {
+            output.status_message.set_message(format!($($args)*, input));
+            output.refresh_screen()?;
+            match Reader.read_key()? {
+                KeyEvent {
+                    code: KeyCode::Enter,
+                    modifiers: KeyModifiers::NONE
+                } => {
+                    if !input.is_empty() {
+                        output.status_message.set_message(String::new());
+                        break;
+                    }
+                }
+                // 按下 esc 键后清除
+                KeyEvent {
+                    code: KeyCode::Esc,
+                    ..
+                } => {
+                    output.status_message.set_message(String::new());
+                    input.clear();
+                    break;
+                }
+                KeyEvent {
+                    code: KeyCode::Backspace | KeyCode::Delete,
+                    modifiers: KeyModifiers::NONE,
+                } => {
+                    input.pop();
+                }
+                KeyEvent {
+                    code: code @ (KeyCode::Char(..) | KeyCode::Tab),
+                    modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+                } => input.push(match code {
+                    KeyCode::Tab => '\t',
+                    KeyCode::Char(ch) => ch,
+                    _ => unreachable!(),
+                }),
+                _=> {}
+            }
+        }
+        if input.is_empty() {None} else {Some (input)}
+    }};
+}
+
 struct CleanUp;
 
 impl Drop for CleanUp {
@@ -508,12 +556,25 @@ impl Editor {
             KeyEvent {
                 code: KeyCode::Char('s'),
                 modifiers: KeyModifiers::CONTROL,
-            } => self.output.editor_rows.save().map(|len| {
-                self.output
-                    .status_message
-                    .set_message(format!("{} butes written to disk", len));
-                self.output.dirty = 0
-            })?,
+            } => {
+                if matches!(self.output.editor_rows.filename, None) {
+                    let prompt = prompt!(&mut self.output, "Save as : {} (Esc to cancel)")
+                        .map(|it| it.into());
+                    if let None = prompt {
+                        self.output
+                            .status_message
+                            .set_message("Save Aborted".into());
+                        return Ok(true);
+                    }
+                    self.output.editor_rows.filename = prompt
+                }
+                self.output.editor_rows.save().map(|len| {
+                    self.output
+                        .status_message
+                        .set_message(format!("{} butes written to disk", len));
+                    self.output.dirty = 0
+                })?
+            }
             KeyEvent {
                 code: key @ (KeyCode::Backspace | KeyCode::Delete),
                 modifiers: KeyModifiers::NONE,
