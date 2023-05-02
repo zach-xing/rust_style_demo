@@ -12,29 +12,34 @@ const QUIT_TIMES: u8 = 3;
 
 #[macro_export]
 macro_rules! prompt {
-    ($output: expr, $($args:tt)*) => {{
-        let output: &mut Output = &mut $output;
+    /* modify */
+    ($output:expr,$args:tt) => {
+        prompt!($output, $args, callback = |&_, _, _| {})
+    };
+    ($output:expr,$args:tt, callback = $callback:expr) => {{
+        let output: &mut Output = $output;
         let mut input = String::with_capacity(32);
         loop {
-            output.status_message.set_message(format!($($args)*, input));
+            output.status_message.set_message(format!($args, input));
             output.refresh_screen()?;
-            match Reader.read_key()? {
+            let key_event = Reader.read_key()?;
+            match key_event {
                 KeyEvent {
                     code: KeyCode::Enter,
-                    modifiers: KeyModifiers::NONE
+                    modifiers: KeyModifiers::NONE,
                 } => {
                     if !input.is_empty() {
                         output.status_message.set_message(String::new());
+                        $callback(output, &input, KeyCode::Enter);
                         break;
                     }
                 }
-                // 按下 esc 键后清除
                 KeyEvent {
-                    code: KeyCode::Esc,
-                    ..
+                    code: KeyCode::Esc, ..
                 } => {
                     output.status_message.set_message(String::new());
                     input.clear();
+                    $callback(output, &input, KeyCode::Esc);
                     break;
                 }
                 KeyEvent {
@@ -46,15 +51,22 @@ macro_rules! prompt {
                 KeyEvent {
                     code: code @ (KeyCode::Char(..) | KeyCode::Tab),
                     modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
-                } => input.push(match code {
-                    KeyCode::Tab => '\t',
-                    KeyCode::Char(ch) => ch,
-                    _ => unreachable!(),
-                }),
-                _=> {}
+                } => {
+                    input.push(match code {
+                        KeyCode::Tab => '\t',
+                        KeyCode::Char(ch) => ch,
+                        _ => unreachable!(),
+                    });
+                }
+                _ => {}
             }
+            $callback(output, &input, key_event.code);
         }
-        if input.is_empty() {None} else {Some (input)}
+        if input.is_empty() {
+            None
+        } else {
+            Some(input)
+        }
     }};
 }
 
@@ -64,6 +76,36 @@ impl Drop for CleanUp {
     fn drop(&mut self) {
         terminal::disable_raw_mode().expect("Could not disable raw mode");
         Output::clear_screen().expect("error");
+    }
+}
+
+enum SearchDirection {
+    Forward,
+    Backward,
+}
+
+struct SearchIndex {
+    x_index: usize,
+    y_index: usize,
+    x_direction: Option<SearchDirection>,
+    y_direction: Option<SearchDirection>,
+}
+
+impl SearchIndex {
+    fn new() -> Self {
+        Self {
+            x_index: 0,
+            y_index: 0,
+            x_direction: None,
+            y_direction: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.y_index = 0;
+        self.x_index = 0;
+        self.y_direction = None;
+        self.x_direction = None;
     }
 }
 
@@ -122,6 +164,21 @@ impl Row {
     fn delete_char(&mut self, at: usize) {
         self.row_content.remove(at);
         EditorRows::render_row(self)
+    }
+
+    /** 考虑了制表位的情况 */
+    fn get_row_content_x(&self, render_x: usize) -> usize {
+        let mut current_render_x = 0;
+        for (cursor_x, ch) in self.row_content.chars().enumerate() {
+            if ch == '\t' {
+                current_render_x += (TAB_STOP - 1) - (current_render_x % TAB_STOP);
+            }
+            current_render_x += 1;
+            if current_render_x > render_x {
+                return cursor_x;
+            }
+        }
+        0
     }
 }
 
@@ -281,6 +338,7 @@ struct Output {
     editor_rows: EditorRows,
     status_message: StatusMessage,
     dirty: u64, // 是否在打开后或保存文件后被修改，脏数据，每更改文本后递增
+    search_index: SearchIndex,
 }
 
 impl Output {
@@ -293,8 +351,11 @@ impl Output {
             editor_contents: EditorContents::new(),
             cursor_controller: CursorController::new(win_size),
             editor_rows: EditorRows::new(),
-            status_message: StatusMessage::new("HELP: Ctrl+Q = Quit | Ctrl-S = Save".into()),
+            status_message: StatusMessage::new(
+                "HELP: Ctrl-S = Save | Ctrl-Q = Quit | Ctrl-F = Find".into(),
+            ),
             dirty: 0,
+            search_index: SearchIndex::new(),
         }
     }
 
@@ -474,6 +535,101 @@ impl Output {
         self.cursor_controller.cursor_y += 1;
         self.dirty += 1;
     }
+
+    fn find_callback(output: &mut Output, keyword: &str, key_code: KeyCode) {
+        match key_code {
+            KeyCode::Esc | KeyCode::Enter => {}
+            _ => {
+                output.search_index.y_direction = None;
+                output.search_index.x_direction = None;
+                match key_code {
+                    KeyCode::Down => {
+                        output.search_index.y_direction = SearchDirection::Forward.into()
+                    }
+                    KeyCode::Up => {
+                        output.search_index.y_direction = SearchDirection::Backward.into()
+                    }
+                    KeyCode::Left => {
+                        output.search_index.x_direction = SearchDirection::Backward.into()
+                    }
+                    KeyCode::Right => {
+                        output.search_index.x_direction = SearchDirection::Forward.into()
+                    }
+                    _ => {}
+                }
+                for i in 0..output.editor_rows.number_of_rows() {
+                    // y方向
+                    let row_index = match output.search_index.y_direction.as_ref() {
+                        None => {
+                            if output.search_index.x_direction.is_none() {
+                                output.search_index.y_index = i;
+                            }
+                            output.search_index.y_index
+                        }
+                        Some(dir) => {
+                            if matches!(dir, SearchDirection::Forward) {
+                                output.search_index.y_index + i + 1
+                            } else {
+                                let res = output.search_index.y_index.saturating_sub(i);
+                                if res == 0 {
+                                    break;
+                                }
+                                res - 1
+                            }
+                        }
+                    };
+                    if row_index > output.editor_rows.number_of_rows() - 1 {
+                        break;
+                    }
+                    let row = output.editor_rows.get_editor_row(row_index);
+
+                    // x方向
+                    let index = match output.search_index.x_direction.as_ref() {
+                        None => row.render.find(&keyword),
+                        Some(dir) => {
+                            let index = if matches!(dir, SearchDirection::Forward) {
+                                let start =
+                                    cmp::min(row.render.len(), output.search_index.x_index + 1);
+                                row.render[start..]
+                                    .find(&keyword)
+                                    .map(|index| index + start)
+                            } else {
+                                row.render[..output.search_index.x_index].rfind(&keyword)
+                            };
+                            if index.is_none() {
+                                break;
+                            }
+                            index
+                        }
+                    };
+
+                    if let Some(index) = index {
+                        output.cursor_controller.cursor_y = row_index;
+                        output.search_index.y_index = row_index;
+                        output.search_index.x_index = index;
+                        output.cursor_controller.cursor_x = row.get_row_content_x(index);
+                        output.cursor_controller.row_offset = output.editor_rows.number_of_rows();
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 搜索
+    fn find(&mut self) -> io::Result<()> {
+        let cursor_controller = self.cursor_controller;
+        if prompt!(
+            self,
+            "Search: {} (Use ESC / Arrows / Enter)",
+            callback = Output::find_callback
+        )
+        .is_none()
+        {
+            self.cursor_controller = cursor_controller;
+        }
+        Ok(())
+    }
 }
 
 struct Reader;
@@ -576,6 +732,13 @@ impl Editor {
                 })?
             }
             KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::NONE,
+            } => {
+                self.output.find()?;
+            }
+            // 退格
+            KeyEvent {
                 code: key @ (KeyCode::Backspace | KeyCode::Delete),
                 modifiers: KeyModifiers::NONE,
             } => {
@@ -607,6 +770,7 @@ impl Editor {
     }
 }
 
+#[derive(Copy, Clone)]
 struct CursorController {
     cursor_x: usize,
     cursor_y: usize,
