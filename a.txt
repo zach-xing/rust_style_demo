@@ -13,3 +13,9 @@ fn draw_rows(&mut self) {
     for i in 0..screen_rows {
         let file_row = i + self.cursor_controller.row_offset;
         if file_row >= self.editor_rows.nu
+sdfsdfsdfsdf
+sdfsdf
+sdf
+sdf
+sdf
+sdf
