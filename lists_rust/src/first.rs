@@ -1,4 +1,4 @@
-///
+/// 一个最小可行单链栈
 use std::mem;
 
 pub struct List {
@@ -13,6 +13,17 @@ struct Node {
 enum Link {
     Empty,
     More(Box<Node>),
+}
+
+impl Drop for List {
+    fn drop(&mut self) {
+        let mut cur_link = mem::replace(&mut self.head, Link::Empty); // 这步就是将 self.head 设置为 None
+
+        // 这个循环就是将链表中的节点置为 None
+        while let Link::More(mut boxed_node) = cur_link {
+            cur_link = mem::replace(&mut boxed_node.next, Link::Empty);
+        }
+    }
 }
 
 impl List {
