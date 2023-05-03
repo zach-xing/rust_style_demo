@@ -17,7 +17,8 @@ enum Link {
 
 impl Drop for List {
     fn drop(&mut self) {
-        let mut cur_link = mem::replace(&mut self.head, Link::Empty); // 这步就是将 self.head 设置为 None
+        // 这步就是将 self.head 设置为 None
+        let mut cur_link = mem::replace(&mut self.head, Link::Empty);
 
         // 这个循环就是将链表中的节点置为 None
         while let Link::More(mut boxed_node) = cur_link {
