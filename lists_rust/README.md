@@ -2,8 +2,10 @@
 
 from https://rust-unofficial.github.io/too-many-lists/index.html
 
-- A Bad Stack - `first.rs`
+- `first.rs` - A Bad Stack
 
-- A Ok Stack - `second.rs`
+- `second.rs` - A Ok Stack
 
-- A Persistent Singly-Linked Stack - `third.rs`
+- `third.rs` - A Persistent Singly-Linked Stack
+
+- `fourth.rs` - A Bad but Safe Doubly-Linked Deque
