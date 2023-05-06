@@ -9,3 +9,4 @@ from https://rust-unofficial.github.io/too-many-lists/index.html
 - `third.rs` - A Persistent Singly-Linked Stack
 
 - `fourth.rs` - A Bad but Safe Doubly-Linked Deque
+https://rust-unofficial.github.io/too-many-lists/fourth-symmetry.html
